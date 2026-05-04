@@ -194,10 +194,13 @@ func New(opts Options) (Interface, error) {
 
 			if wfe.getWorkItemsCount.Add(-1) == 0 && wfe.actorsRegistered {
 				log.Debug("Unregistering workflow actors")
-				if err := abackend.UnRegisterActors(ctx); err != nil {
+				// Reset unconditionally: UnRegisterActors removes types from the
+				// table before HaltAll, so an error here still means they're gone.
+				err := abackend.UnRegisterActors(ctx)
+				wfe.actorsRegistered = false
+				if err != nil {
 					return err
 				}
-				wfe.actorsRegistered = false
 			}
 
 			return nil
