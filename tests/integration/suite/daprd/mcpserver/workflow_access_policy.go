@@ -112,12 +112,12 @@ spec:
   rules:
   - callers:
     - appID: mcp-caller
-    operations:
-    - type: workflow
-      name: "dapr.internal.mcp.denied-server.*"
+    workflows:
+    - name: "dapr.internal.mcp.denied-server.*"
+      operations: [schedule]
       action: deny
-    - type: workflow
-      name: "local_hook_workflow"
+    - name: "local_hook_workflow"
+      operations: [schedule]
       action: deny
 `), 0o600))
 
@@ -183,9 +183,9 @@ spec:
   rules:
   - callers:
     - appID: mcp-target
-    operations:
-    - type: workflow
-      name: "remote_audit_workflow"
+    workflows:
+    - name: "remote_audit_workflow"
+      operations: [schedule]
       action: deny
 `), 0o600))
 
@@ -251,7 +251,7 @@ func (w *workflowAccessPolicy) Run(t *testing.T, ctx context.Context) {
 
 	// Workflow that calls the ALLOWED MCP server cross-app (local middleware hook).
 	require.NoError(t, callerReg.AddWorkflowN("InvokeAllowedMCP", func(ctx *task.WorkflowContext) (any, error) {
-		var output string
+		var output any
 		err := ctx.CallChildWorkflow(
 			mcpnames.MCPCallToolWorkflowName("allowed-server", "ping"),
 			task.WithChildWorkflowAppID("mcp-target"),
