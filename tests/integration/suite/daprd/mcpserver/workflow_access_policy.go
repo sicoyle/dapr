@@ -99,7 +99,12 @@ spec:
 	// --- Target resources ---
 	targetResDir := t.TempDir()
 
-	// Policy on target: deny caller from denied-server MCP workflows and direct hook invocation.
+	// Policy on target: allow-list. mcp-caller may only schedule the
+	// allowed-server and crossapp-hook-server MCP workflows. Anything else
+	// (denied-server, direct local_hook_workflow invocation) is implicitly
+	// denied. Self-calls on target are always allowed and need no rule —
+	// that's how the local middleware hook is permitted in the allowed-server
+	// flow.
 	require.NoError(t, os.WriteFile(filepath.Join(targetResDir, "policy.yaml"), []byte(`
 apiVersion: dapr.io/v1alpha1
 kind: WorkflowAccessPolicy
@@ -108,17 +113,14 @@ metadata:
 scopes:
 - mcp-target
 spec:
-  defaultAction: allow
   rules:
   - callers:
     - appID: mcp-caller
     workflows:
-    - name: "dapr.internal.mcp.denied-server.*"
+    - name: "dapr.internal.mcp.allowed-server.*"
       operations: [schedule]
-      action: deny
-    - name: "local_hook_workflow"
+    - name: "dapr.internal.mcp.crossapp-hook-server.*"
       operations: [schedule]
-      action: deny
 `), 0o600))
 
 	// MCPServer without middleware — deny test.
@@ -169,8 +171,11 @@ spec:
 	// --- Hook-app resources ---
 	hookAppResDir := t.TempDir()
 
-	// Policy on hook-app: deny target from invoking remote_audit_workflow.
-	// This tests that cross-app middleware hooks are subject to the remote app's access policy.
+	// Policy on hook-app: allow-list. The rule grants access to a placeholder
+	// caller that nothing matches; the policy's mere presence flips hook-app
+	// to deny-by-default for cross-app callers, which denies target from
+	// scheduling remote_audit_workflow. This tests that cross-app middleware
+	// hooks are subject to the remote app's access policy.
 	require.NoError(t, os.WriteFile(filepath.Join(hookAppResDir, "policy.yaml"), []byte(`
 apiVersion: dapr.io/v1alpha1
 kind: WorkflowAccessPolicy
@@ -179,14 +184,12 @@ metadata:
 scopes:
 - hook-app
 spec:
-  defaultAction: allow
   rules:
   - callers:
-    - appID: mcp-target
+    - appID: never-matched
     workflows:
-    - name: "remote_audit_workflow"
+    - name: "*"
       operations: [schedule]
-      action: deny
 `), 0o600))
 
 	w.caller = daprd.New(t,
