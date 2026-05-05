@@ -20,23 +20,23 @@ const (
 	// MCPWorkflowPrefix is the prefix for all MCP internal workflows.
 	MCPWorkflowPrefix = "dapr.internal.mcp." //nolint:gosec // workflow name prefix, not a credential
 
-	// MCPMethodListTools is the suffix for ListTools operations.
-	MCPMethodListTools = ".ListTools"
+	// MCPMethodListTools is the segment identifier for ListTools operations.
+	MCPMethodListTools = "ListTools"
 
-	// MCPMethodCallTool is the suffix for CallTool operations.
-	MCPMethodCallTool = ".CallTool"
+	// MCPMethodCallTool is the segment identifier for CallTool operations.
+	MCPMethodCallTool = "CallTool"
 )
 
 // MCPListToolsWorkflowName returns the full workflow name for a ListTools
 // operation on the given MCPServer: dapr.internal.mcp.<server>.ListTools
 func MCPListToolsWorkflowName(serverName string) string {
-	return MCPWorkflowPrefix + serverName + MCPMethodListTools
+	return MCPWorkflowPrefix + serverName + "." + MCPMethodListTools
 }
 
 // MCPCallToolWorkflowName returns the full workflow name for a CallTool
 // operation on the given MCPServer and tool: dapr.internal.mcp.<server>.CallTool.<toolName>
 func MCPCallToolWorkflowName(serverName, toolName string) string {
-	return MCPWorkflowPrefix + serverName + MCPMethodCallTool + "." + toolName
+	return MCPWorkflowPrefix + serverName + "." + MCPMethodCallTool + "." + toolName
 }
 
 // MCPListToolsActivityName returns the activity name for a ListTools transport

@@ -203,8 +203,19 @@ func makeOrchestrator(server mcpserverapi.MCPServer, store *compstore.ComponentS
 	return func(ctx *task.WorkflowContext) (any, error) {
 		name := ctx.Name
 
+		// MCP workflow names are: <MCPWorkflowPrefix.><server>.<method>[.<tool>]
+		if !strings.HasPrefix(name, mcpnames.MCPWorkflowPrefix) {
+			return nil, fmt.Errorf("unknown MCP workflow name %q: expected prefix %q",
+				name, mcpnames.MCPWorkflowPrefix)
+		}
+		parts := strings.Split(name[len(mcpnames.MCPWorkflowPrefix):], ".")
+		if len(parts) < 2 {
+			return nil, fmt.Errorf("unknown MCP workflow name %q: missing method segment", name)
+		}
+		method := parts[1]
+
 		switch {
-		case strings.HasSuffix(name, mcpnames.MCPMethodListTools):
+		case method == mcpnames.MCPMethodListTools && len(parts) == 2:
 			if err := runBeforeListTools(ctx, &server, serverName); err != nil {
 				return nil, fmt.Errorf("beforeListTools failed: %w", err)
 			}
@@ -221,10 +232,8 @@ func makeOrchestrator(server mcpserverapi.MCPServer, store *compstore.ComponentS
 			}
 			return final, nil
 
-		case strings.Contains(name, mcpnames.MCPMethodCallTool+"."):
-			// Extract tool name from workflow name:
-			// "dapr.internal.mcp.<server>.CallTool.<tool>" -> "<tool>"
-			toolName := name[strings.LastIndex(name, ".")+1:]
+		case method == mcpnames.MCPMethodCallTool && len(parts) == 3:
+			toolName := parts[2]
 
 			var input wfv1.MCPCallToolWorkflowInput
 			if err := ctx.GetInput(&input); err != nil {
@@ -268,7 +277,7 @@ func makeOrchestrator(server mcpserverapi.MCPServer, store *compstore.ComponentS
 			return final, nil
 
 		default:
-			return nil, fmt.Errorf("unknown MCP workflow name %q: expected suffix %q or %q",
+			return nil, fmt.Errorf("unknown MCP workflow name %q: expected method %q or %q",
 				name, mcpnames.MCPMethodListTools, mcpnames.MCPMethodCallTool)
 		}
 	}

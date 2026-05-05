@@ -150,8 +150,6 @@ func makeListToolsActivity(server mcpserverapi.MCPServer, holder *SessionHolder,
 		timeout := CallTimeout(&server)
 		workerLog.Debugf("list-tools: MCPServer %q per-page timeout=%s", serverName, timeout)
 
-		const maxListToolsPages = 500
-
 		var tools []*wfv1.MCPToolDefinition
 		var cursor string
 		for range maxListToolsPages {

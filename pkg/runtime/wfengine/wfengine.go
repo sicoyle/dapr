@@ -98,14 +98,15 @@ type Options struct {
 }
 
 type engine struct {
-	appID             string
-	namespace         string
-	actors            actors.Interface
-	getWorkItemsCount atomic.Int32
-	// actorRegLock guards getWorkItemsCount transitions and actorsRegistered.
-	// Held by the GetWorkItems connect/disconnect callbacks and by
-	// EnsureActorsRegistered so all three paths can read and write the
-	// registration state without racing.
+	appID                string
+	namespace            string
+	actors               actors.Interface
+	getWorkItemsCount    atomic.Int32
+	mcpRegistrationCount atomic.Int32
+	// actorRegLock guards the registration counters and actorsRegistered.
+	// Held by the GetWorkItems connect/disconnect callbacks, EnsureActorsRegistered,
+	// and UnregisterMCPServer so all paths can read and write the registration
+	// state without racing.
 	actorRegLock sync.Mutex
 	// actorsRegistered tracks whether workflow actor types are currently
 	// registered with placement. Guarded by actorRegLock.
@@ -174,9 +175,11 @@ func New(opts Options) (Interface, error) {
 			wfe.actorRegLock.Lock()
 			defer wfe.actorRegLock.Unlock()
 
-			if wfe.getWorkItemsCount.Add(1) == 1 && !wfe.actorsRegistered {
+			wfe.getWorkItemsCount.Add(1)
+			if !wfe.actorsRegistered {
 				log.Debug("Registering workflow actors")
 				if err := abackend.RegisterActors(ctx); err != nil {
+					wfe.getWorkItemsCount.Add(-1)
 					return err
 				}
 				wfe.actorsRegistered = true
@@ -192,7 +195,7 @@ func New(opts Options) (Interface, error) {
 				ctx = context.Background()
 			}
 
-			if wfe.getWorkItemsCount.Add(-1) == 0 && wfe.actorsRegistered {
+			if wfe.getWorkItemsCount.Add(-1) == 0 && wfe.mcpRegistrationCount.Load() == 0 && wfe.actorsRegistered {
 				log.Debug("Unregistering workflow actors")
 				// Reset unconditionally: UnRegisterActors removes types from the
 				// table before HaltAll, so an error here still means they're gone.
@@ -252,22 +255,23 @@ func New(opts Options) (Interface, error) {
 	return wfe, nil
 }
 
-// EnsureActorsRegistered registers workflow actor types with placement if they
-// haven't been registered yet. This is needed when internal workflows
-// are used before any external SDK worker connects via GetWorkItems.
+// EnsureActorsRegistered bumps the MCP registration count and registers workflow
+// actor types with placement if they aren't already. Callers (managed-workflow
+// registrars such as MCPServer) MUST pair this with UnregisterMCPServer so the
+// count is balanced and actors are torn down when no longer referenced.
 func (wfe *engine) EnsureActorsRegistered(ctx context.Context) error {
 	wfe.actorRegLock.Lock()
 	defer wfe.actorRegLock.Unlock()
 
-	if wfe.actorsRegistered {
-		return nil
+	wfe.mcpRegistrationCount.Add(1)
+	if !wfe.actorsRegistered {
+		log.Debug("Registering workflow actors for internal workflows")
+		if err := wfe.backend.RegisterActors(ctx); err != nil {
+			wfe.mcpRegistrationCount.Add(-1)
+			return err
+		}
+		wfe.actorsRegistered = true
 	}
-
-	log.Debug("Registering workflow actors for internal workflows")
-	if err := wfe.backend.RegisterActors(ctx); err != nil {
-		return err
-	}
-	wfe.actorsRegistered = true
 	return nil
 }
 
@@ -277,10 +281,24 @@ func (wfe *engine) RegisterMCPServer(ctx context.Context, server mcpserverapi.MC
 	return wfe.inProcessExec.RegisterMCPServer(ctx, server, store, sec)
 }
 
-// UnregisterMCPServer forwards to the in-process executor.
+// UnregisterMCPServer forwards to the in-process executor and decrements the
+// MCP registration count. Unregisters workflow actors when the count drops to
+// zero AND no external SDK workers are connected.
 // Implements processor.internalWorkflowRegistrar.
 func (wfe *engine) UnregisterMCPServer(serverName string) {
 	wfe.inProcessExec.UnregisterMCPServer(serverName)
+
+	wfe.actorRegLock.Lock()
+	defer wfe.actorRegLock.Unlock()
+
+	if wfe.mcpRegistrationCount.Add(-1) == 0 && wfe.getWorkItemsCount.Load() == 0 && wfe.actorsRegistered {
+		log.Debug("Unregistering workflow actors")
+		err := wfe.backend.UnRegisterActors(context.Background())
+		wfe.actorsRegistered = false
+		if err != nil {
+			log.Warnf("Failed to unregister workflow actors: %s", err)
+		}
+	}
 }
 
 func (wfe *engine) InProcessExecutor() *inprocess.Executor {
