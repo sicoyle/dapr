@@ -402,6 +402,12 @@ spec:
                 - message: exactly one of streamableHTTP, sse, or stdio must be set
                   rule: '(has(self.streamableHTTP) ? 1 : 0) + (has(self.sse) ? 1 :
                     0) + (has(self.stdio) ? 1 : 0) == 1'
+              ignoreErrors:
+                description: |-
+                  IgnoreErrors, when true, allows daprd to continue running if validation
+                  or secret resolution fails for this MCPServer. When false (default),
+                  such failures cause daprd to exit gracefully.
+                type: boolean
               middleware:
                 description: Middleware defines optional workflow hooks invoked around
                   each tool call.

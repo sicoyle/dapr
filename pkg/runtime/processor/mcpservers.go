@@ -15,6 +15,7 @@ package processor
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	commonapi "github.com/dapr/dapr/pkg/apis/common"
@@ -57,27 +58,52 @@ func (p *Processor) AddPendingMCPServer(ctx context.Context, s mcpserverapi.MCPS
 	}
 }
 
-// processMCPServers reads from the pendingMCPServers channel, resolves secrets,
-// and adds each MCPServer to the component store.
-// Workflow registration runs concurrently as each performs a network round-trip to discover tools.
+// processMCPServerErrors returns the first async MCPServer registration error
+// to the runner manager.
+func (p *Processor) processMCPServerErrors(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return nil
+	case <-p.closedCh:
+		return nil
+	case err := <-p.mcpErrCh:
+		return err
+	}
+}
+
+// errorMCPServers forwards an async registration error.
+func (p *Processor) errorMCPServers(ctx context.Context, err error) {
+	select {
+	case p.mcpErrCh <- err:
+	case <-ctx.Done():
+	case <-p.closedCh:
+	}
+}
+
+// processMCPServers resolves secrets and registers workflows for each MCPServer.
+// Failures fail the runtime by default; spec.ignoreErrors=true opts out.
 func (p *Processor) processMCPServers(ctx context.Context) error {
 	var wg sync.WaitGroup
 
-	for s := range p.pendingMCPServers {
-		if s.Name == "" {
-			// Flush sentinel: wait for in-flight registrations before continuing.
-			wg.Wait()
-			continue
-		}
-
+	process := func(s mcpserverapi.MCPServer) error {
 		if err := validate.MCPServer(ctx, &s); err != nil {
-			log.Warnf("MCPServer %q failed validation: %s", s.Name, err)
-			continue
+			err = fmt.Errorf("MCPServer %q failed validation: %w", s.Name, err)
+			if !s.Spec.IgnoreErrors {
+				log.Warnf("Error processing MCPServer, daprd will exit gracefully: %s", err)
+				return err
+			}
+			log.Errorf("Ignoring error processing MCPServer: %s", err)
+			return nil
 		}
 
 		if err := validate.MCPServerSecurity(&s, p.kubernetesMode); err != nil {
-			log.Warnf("MCPServer %q failed security validation: %s", s.Name, err)
-			continue
+			err = fmt.Errorf("MCPServer %q failed security validation: %w", s.Name, err)
+			if !s.Spec.IgnoreErrors {
+				log.Warnf("Error processing MCPServer, daprd will exit gracefully: %s", err)
+				return err
+			}
+			log.Errorf("Ignoring error processing MCPServer: %s", err)
+			return nil
 		}
 
 		p.processMCPServerSecrets(ctx, &s)
@@ -86,35 +112,53 @@ func (p *Processor) processMCPServers(ctx context.Context) error {
 
 		registrar := p.getInternalWorkflows()
 		if registrar == nil {
-			continue
+			return nil
 		}
 
 		// Skip registration if the runtime is already shutting down — the
 		// derived contexts inside RegisterMCPServer would just error out.
 		if ctx.Err() != nil {
-			continue
+			return nil
 		}
 
 		wg.Add(1)
 		go func(s mcpserverapi.MCPServer) {
 			defer wg.Done()
-			// Recover so a panic in one server's registration does not bring down the whole sidecar.
-			// The failure is isolated to that server.
-			defer func() {
-				if r := recover(); r != nil {
-					log.Errorf("MCPServer %q: panic during workflow registration: %v", s.Name, r)
-				}
-			}()
 			// Ensure workflow actor types are registered with placement before
 			// any internal workflow becomes invokable.
 			if err := registrar.EnsureActorsRegistered(ctx); err != nil {
-				log.Warnf("MCPServer %q: failed to register workflow actors: %s", s.Name, err)
+				err = fmt.Errorf("MCPServer %q: failed to register workflow actors: %w", s.Name, err)
+				if !s.Spec.IgnoreErrors {
+					log.Warnf("Async error processing MCPServer, daprd will exit gracefully: %s", err)
+					p.errorMCPServers(ctx, err)
+					return
+				}
+				log.Errorf("Ignoring async error processing MCPServer: %s", err)
 				return
 			}
 			if err := registrar.RegisterMCPServer(ctx, s, p.compStore, p.security); err != nil {
-				log.Warnf("MCPServer %q: failed to register workflows: %s", s.Name, err)
+				err = fmt.Errorf("MCPServer %q: failed to register workflows: %w", s.Name, err)
+				if !s.Spec.IgnoreErrors {
+					log.Warnf("Async error processing MCPServer, daprd will exit gracefully: %s", err)
+					p.errorMCPServers(ctx, err)
+					return
+				}
+				log.Errorf("Ignoring async error processing MCPServer: %s", err)
 			}
 		}(s)
+		return nil
+	}
+
+	for s := range p.pendingMCPServers {
+		if s.Name == "" {
+			// Flush sentinel: wait for in-flight registrations before continuing.
+			wg.Wait()
+			continue
+		}
+		if err := process(s); err != nil {
+			wg.Wait()
+			return err
+		}
 	}
 
 	wg.Wait()

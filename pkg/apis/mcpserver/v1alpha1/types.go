@@ -145,6 +145,12 @@ type MCPServerSpec struct {
 	// Middleware defines optional workflow hooks invoked around each tool call.
 	//+optional
 	Middleware *MCPMiddleware `json:"middleware,omitempty"`
+
+	// IgnoreErrors, when true, allows daprd to continue running if validation
+	// or secret resolution fails for this MCPServer. When false (default),
+	// such failures cause daprd to exit gracefully.
+	//+optional
+	IgnoreErrors bool `json:"ignoreErrors,omitempty"`
 }
 
 // MCPEndpoint describes how to reach the MCP server.

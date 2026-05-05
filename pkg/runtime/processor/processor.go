@@ -136,6 +136,7 @@ type Processor struct {
 	pendingComponentsWaiting   sync.RWMutex
 	pendingComponentDependents map[string][]componentsapi.Component
 	subErrCh                   chan error
+	mcpErrCh                   chan error
 
 	lock     sync.RWMutex
 	chlock   sync.RWMutex
@@ -219,6 +220,7 @@ func New(opts Options) *Processor {
 		pendingComponents:          make(chan componentsapi.Component),
 		pendingComponentDependents: make(map[string][]componentsapi.Component),
 		subErrCh:                   make(chan error),
+		mcpErrCh:                   make(chan error),
 		closedCh:                   make(chan struct{}),
 		compStore:                  opts.ComponentStore,
 		state:                      state,
@@ -276,6 +278,7 @@ func (p *Processor) Process(ctx context.Context) error {
 		p.processComponents,
 		p.processHTTPEndpoints,
 		p.processMCPServers,
+		p.processMCPServerErrors,
 		p.processSubscriptions,
 		p.subscriber.Run,
 		func(ctx context.Context) error {
