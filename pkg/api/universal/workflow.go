@@ -16,6 +16,7 @@ package universal
 import (
 	"context"
 	"errors"
+	"strings"
 	"unicode"
 
 	"github.com/google/uuid"
@@ -27,6 +28,7 @@ import (
 	"github.com/dapr/dapr/pkg/messages"
 	runtimev1pb "github.com/dapr/dapr/pkg/proto/runtime/v1"
 	"github.com/dapr/dapr/pkg/resiliency"
+	"github.com/dapr/dapr/pkg/runtime/wfengine"
 	"github.com/dapr/durabletask-go/api"
 )
 
@@ -87,6 +89,12 @@ func (a *Universal) StartWorkflow(ctx context.Context, in *runtimev1pb.StartWork
 
 	if in.GetWorkflowName() == "" {
 		err := messages.ErrWorkflowNameMissing
+		a.logger.Debug(err)
+		return &runtimev1pb.StartWorkflowResponse{}, err
+	}
+
+	if strings.HasPrefix(in.GetWorkflowName(), wfengine.ReservedWorkflowNamePrefix) {
+		err := messages.ErrWorkflowNameReserved.WithFormat(in.GetWorkflowName(), wfengine.ReservedWorkflowNamePrefix)
 		a.logger.Debug(err)
 		return &runtimev1pb.StartWorkflowResponse{}, err
 	}

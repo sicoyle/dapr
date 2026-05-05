@@ -49,7 +49,10 @@ var (
 	wfBackendLogger = logger.NewLogger("dapr.wfengine.durabletask.backend")
 )
 
-const inprocessWorkflowNamePrefix = "dapr.internal."
+// ReservedWorkflowNamePrefix is the prefix daprd uses for managed (in-process)
+// workflow names. The Universal API rejects user-supplied names with this prefix
+// and the gRPC executor routes names with this prefix to the in-process executor.
+const ReservedWorkflowNamePrefix = "dapr.internal."
 
 type Interface interface {
 	// Registrar is the consumer-side surface used by the processor to register
@@ -211,8 +214,6 @@ func New(opts Options) (Interface, error) {
 		backend.WithStreamSendTimeout(time.Second*10),
 	)
 
-	// TODO: handle somewhere that users cannot use a managed workflow name themselves.
-
 	var topts []backend.NewTaskWorkerOptions
 	if opts.Spec.GetMaxConcurrentWorkflowInvocations() != nil {
 		topts = []backend.NewTaskWorkerOptions{
@@ -224,7 +225,7 @@ func New(opts Options) (Interface, error) {
 		Backend:             abackend,
 		Executor:            grpcExec,
 		InProcessExecutor:   inProcessExec.Backend(),
-		InProcessNamePrefix: inprocessWorkflowNamePrefix,
+		InProcessNamePrefix: ReservedWorkflowNamePrefix,
 		Logger:              wfBackendLogger,
 		AppID:               opts.AppID,
 	}, topts...)
@@ -240,7 +241,7 @@ func New(opts Options) (Interface, error) {
 		abackend,
 		grpcExec,
 		inProcessExec.Backend(),
-		inprocessWorkflowNamePrefix,
+		ReservedWorkflowNamePrefix,
 		wfBackendLogger,
 		topts...,
 	)
