@@ -113,6 +113,9 @@ func (s *spiffeAuth) Setup(t *testing.T) []framework.Option {
 		daprd.WithMode("standalone"),
 		daprd.WithExecOptions(exec.WithEnvVars(t, "DAPR_TRUST_ANCHORS", string(bundle.X509.TrustAnchors))),
 		daprd.WithSentryAddress(s.sent.Address()),
+		// Pre-register the audience the MCPServer YAML asks for.
+		// dapr's SPIFFE JWT source only fetches SVIDs for audiences known at startup.
+		daprd.WithSentryRequestJwtAudiences("mcp://test-server"),
 		daprd.WithPlacementAddresses(s.place.Address()),
 		daprd.WithSchedulerAddresses(s.sched.Address()),
 		daprd.WithEnableMTLS(true),
@@ -188,7 +191,8 @@ func (s *spiffeAuth) Run(t *testing.T, ctx context.Context) {
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
 			},
 		}
-		oidcURL := fmt.Sprintf("https://localhost:%d/.well-known/openid-configuration", s.sent.OIDCPort(t))
+		// Sentry's OIDC server is configured with oidc-server-tls-enabled=false, so the discovery endpoint is plain HTTP.
+		oidcURL := fmt.Sprintf("http://localhost:%d/.well-known/openid-configuration", s.sent.OIDCPort(t))
 		resp, err := insecureClient.Get(oidcURL)
 		require.NoError(t, err)
 		defer resp.Body.Close()
