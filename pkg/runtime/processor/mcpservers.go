@@ -38,6 +38,13 @@ func (r mcpStdioEnvResource) NameValuePairs() []commonapi.NameValuePair {
 	return r.Spec.Endpoint.Stdio.Env
 }
 
+// mcpLifecycleLock returns the per-server-name mutex used to serialize the
+// compStore + registrar mutations on Add and Delete.
+func (p *Processor) mcpLifecycleLock(name string) *sync.Mutex {
+	actual, _ := p.mcpLifecycleLocks.LoadOrStore(name, &sync.Mutex{})
+	return actual.(*sync.Mutex)
+}
+
 // AddPendingMCPServer enqueues an MCPServer for processing.
 // Returns false if the processor has shut down or the context is done.
 func (p *Processor) AddPendingMCPServer(ctx context.Context, s mcpserverapi.MCPServer) bool {
@@ -110,7 +117,7 @@ func (p *Processor) processMCPServers(ctx context.Context) error {
 		p.compStore.AddMCPServer(s)
 		log.Infof("MCPServer loaded: %s", s.LogName())
 
-		registrar := p.getInternalWorkflows()
+		registrar := p.getInProcessWorkflows()
 		if registrar == nil {
 			return nil
 		}
@@ -124,6 +131,17 @@ func (p *Processor) processMCPServers(ctx context.Context) error {
 		wg.Add(1)
 		go func(s mcpserverapi.MCPServer) {
 			defer wg.Done()
+
+			lock := p.mcpLifecycleLock(s.Name)
+			lock.Lock()
+			defer lock.Unlock()
+
+			// If Delete arrived between channel processing and
+			// us acquiring the lock, the server is gone — skip registration.
+			if _, ok := p.compStore.GetMCPServer(s.Name); !ok {
+				return
+			}
+
 			// Ensure workflow actor types are registered with placement before
 			// any internal workflow becomes invokable.
 			if err := registrar.EnsureActorsRegistered(ctx); err != nil {
@@ -167,8 +185,12 @@ func (p *Processor) processMCPServers(ctx context.Context) error {
 
 // DeleteMCPServer removes an MCPServer from the store and unregisters its workflows.
 func (p *Processor) DeleteMCPServer(serverName string) {
+	lock := p.mcpLifecycleLock(serverName)
+	lock.Lock()
+	defer lock.Unlock()
+
 	p.compStore.DeleteMCPServer(serverName)
-	if registrar := p.getInternalWorkflows(); registrar != nil {
+	if registrar := p.getInProcessWorkflows(); registrar != nil {
 		registrar.UnregisterMCPServer(serverName)
 	}
 }

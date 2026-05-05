@@ -144,25 +144,29 @@ type Processor struct {
 	shutdown atomic.Bool
 	closedCh chan struct{}
 
-	// internalWorkflows is set after the workflow engine is created via
-	// SetInternalWorkflows. Used to register internal workflows when resources
-	// are loaded or hot-reloaded.
-	internalWorkflowsLock sync.RWMutex
-	internalWorkflows     wfregistrar.Registrar
+	// inProcessWorkflows is set after the workflow engine is created via SetInProcessWorkflows.
+	// Used to register in-process workflows when resources are loaded or hot-reloaded.
+	inProcessWorkflowsLock sync.RWMutex
+	inProcessWorkflows     wfregistrar.Registrar
+
+	// mcpLifecycleLocks is a sync.Map[string]*sync.Mutex keyed by MCPServer
+	// name. Held during the compStore + registrar mutations on both Add and
+	// Delete paths so they remain atomic per-server.
+	mcpLifecycleLocks sync.Map
 }
 
-// SetInternalWorkflows installs the internal workflow wfregistrar.
-func (p *Processor) SetInternalWorkflows(r wfregistrar.Registrar) {
-	p.internalWorkflowsLock.Lock()
-	defer p.internalWorkflowsLock.Unlock()
-	p.internalWorkflows = r
+// SetInProcessWorkflows installs the in-process workflow wfregistrar.
+func (p *Processor) SetInProcessWorkflows(r wfregistrar.Registrar) {
+	p.inProcessWorkflowsLock.Lock()
+	defer p.inProcessWorkflowsLock.Unlock()
+	p.inProcessWorkflows = r
 }
 
-// getInternalWorkflows returns the wfregistrar, or nil if it has not been set yet.
-func (p *Processor) getInternalWorkflows() wfregistrar.Registrar {
-	p.internalWorkflowsLock.RLock()
-	defer p.internalWorkflowsLock.RUnlock()
-	return p.internalWorkflows
+// getInProcessWorkflows returns the wfregistrar, or nil if it has not been set yet.
+func (p *Processor) getInProcessWorkflows() wfregistrar.Registrar {
+	p.inProcessWorkflowsLock.RLock()
+	defer p.inProcessWorkflowsLock.RUnlock()
+	return p.inProcessWorkflows
 }
 
 func New(opts Options) *Processor {

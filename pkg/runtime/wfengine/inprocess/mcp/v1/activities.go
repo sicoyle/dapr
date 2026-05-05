@@ -14,8 +14,10 @@ limitations under the License.
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -30,6 +32,105 @@ import (
 type activityCallToolInput struct {
 	ToolName  string         `json:"tool_name"`
 	Arguments map[string]any `json:"arguments,omitempty"`
+}
+
+// listToolsPage runs one paginated ListTools call with a per-call timeout and
+// a single connection-closed retry.
+func listToolsPage(
+	baseCtx context.Context,
+	timeout time.Duration,
+	holder *SessionHolder,
+	serverName string,
+	params *mcp.ListToolsParams,
+) (*mcp.ListToolsResult, error) {
+	pageCtx, pageCancel := withDeadline(baseCtx, timeout)
+	defer pageCancel()
+
+	session, err := holder.Session(pageCtx)
+	if err != nil {
+		return nil, fmt.Errorf("list-tools: session for %q: %w", serverName, err)
+	}
+	result, err := session.ListTools(pageCtx, params)
+	if err == nil {
+		return result, nil
+	}
+	if !isConnectionClosed(err) {
+		return nil, fmt.Errorf("list-tools: initial call failed for %q: %w", serverName, err)
+	}
+
+	workerLog.Warnf("list-tools: connection lost for %q, reconnecting", serverName)
+	session, err = holder.Reconnect(pageCtx)
+	if err != nil {
+		return nil, fmt.Errorf("list-tools: reconnect failed for %q: %w", serverName, err)
+	}
+	result, err = session.ListTools(pageCtx, params)
+	if err != nil {
+		return nil, fmt.Errorf("list-tools: retry call failed for %q after reconnect: %w", serverName, err)
+	}
+	return result, nil
+}
+
+// callToolOnce runs one CallTool with a single connection-closed retry.
+func callToolOnce(
+	callCtx context.Context,
+	holder *SessionHolder,
+	serverName string,
+	params *mcp.CallToolParams,
+) (*mcp.CallToolResult, error) {
+	session, err := holder.Session(callCtx)
+	if err != nil {
+		return nil, fmt.Errorf("call-tool: session for %q: %w", serverName, err)
+	}
+	result, err := session.CallTool(callCtx, params)
+	if err == nil {
+		return result, nil
+	}
+	if !isConnectionClosed(err) {
+		return nil, fmt.Errorf("call-tool: initial call failed for %q: %w", serverName, err)
+	}
+
+	workerLog.Warnf("call-tool: connection lost for %q, reconnecting", serverName)
+	session, err = holder.Reconnect(callCtx)
+	if err != nil {
+		return nil, fmt.Errorf("call-tool: reconnect failed for %q: %w", serverName, err)
+	}
+	result, err = session.CallTool(callCtx, params)
+	if err != nil {
+		return nil, fmt.Errorf("call-tool: retry call failed for %q after reconnect: %w", serverName, err)
+	}
+	return result, nil
+}
+
+// toolDefinitionFromMCP converts a single mcp.Tool into a wfv1.MCPToolDefinition,
+// converting the input schema and populating the schema cache. Returns an error
+// for any malformed schema; callers should fail the parent activity.
+func toolDefinitionFromMCP(t *mcp.Tool, serverName string, schemas *toolSchemaCache) (*wfv1.MCPToolDefinition, error) {
+	td := &wfv1.MCPToolDefinition{
+		Name: t.Name,
+	}
+	if t.Description != "" {
+		td.Description = &t.Description
+	}
+	if t.InputSchema == nil {
+		return td, nil
+	}
+	schema, ok := t.InputSchema.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("list-tools: tool %q on MCPServer %q has non-object inputSchema (type %T)", t.Name, serverName, t.InputSchema)
+	}
+	s, err := structpb.NewStruct(schema)
+	if err != nil {
+		return nil, fmt.Errorf("list-tools: tool %q on MCPServer %q: failed to convert inputSchema: %w", t.Name, serverName, err)
+	}
+	td.InputSchema = s
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		return nil, fmt.Errorf("list-tools: tool %q on MCPServer %q: failed to marshal inputSchema: %w", t.Name, serverName, err)
+	}
+	if err := schemas.set(t.Name, raw); err != nil {
+		return nil, fmt.Errorf("list-tools: tool %q on MCPServer %q: %w", t.Name, serverName, err)
+	}
+	return td, nil
 }
 
 // makeListToolsActivity returns a task.Activity that calls ListTools on the given MCP server.
@@ -49,14 +150,6 @@ func makeListToolsActivity(server mcpserverapi.MCPServer, holder *SessionHolder,
 		timeout := CallTimeout(&server)
 		workerLog.Debugf("list-tools: MCPServer %q per-page timeout=%s", serverName, timeout)
 
-		// Use the per-page timeout for the initial Session() call.
-		sessionCtx, sessionCancel := withDeadline(baseCtx, timeout)
-		session, err := holder.Session(sessionCtx)
-		sessionCancel()
-		if err != nil {
-			return &wfv1.ListMCPToolsResponse{}, fmt.Errorf("list-tools: %w", err)
-		}
-
 		const maxListToolsPages = 500
 
 		var tools []*wfv1.MCPToolDefinition
@@ -66,50 +159,15 @@ func makeListToolsActivity(server mcpserverapi.MCPServer, holder *SessionHolder,
 			if cursor != "" {
 				params.Cursor = cursor
 			}
-			// Apply the timeout per network call rather than across the whole pagination loop.
-			pageCtx, pageCancel := withDeadline(baseCtx, timeout)
-			result, err := session.ListTools(pageCtx, params)
+			result, err := listToolsPage(baseCtx, timeout, holder, serverName, params)
 			if err != nil {
-				if isConnectionClosed(err) {
-					workerLog.Warnf("list-tools: connection lost for %q, reconnecting", serverName)
-					session, err = holder.Reconnect(pageCtx)
-					if err != nil {
-						pageCancel()
-						return &wfv1.ListMCPToolsResponse{}, fmt.Errorf("list-tools: reconnect failed for %q: %w", serverName, err)
-					}
-					result, err = session.ListTools(pageCtx, params)
-				}
-				if err != nil {
-					pageCancel()
-					return &wfv1.ListMCPToolsResponse{}, fmt.Errorf("list-tools: MCP call failed for %q: %w", serverName, err)
-				}
+				return &wfv1.ListMCPToolsResponse{}, err
 			}
-			pageCancel()
 
 			for _, t := range result.Tools {
-				td := &wfv1.MCPToolDefinition{
-					Name: t.Name,
-				}
-				if t.Description != "" {
-					td.Description = &t.Description
-				}
-				if t.InputSchema != nil {
-					schema, ok := t.InputSchema.(map[string]any)
-					if !ok {
-						workerLog.Warnf("list-tools: tool %q on MCPServer %q has non-object inputSchema (type %T), skipping schema", t.Name, serverName, t.InputSchema)
-					} else {
-						s, err := structpb.NewStruct(schema)
-						if err != nil {
-							workerLog.Warnf("list-tools: tool %q on MCPServer %q: failed to convert inputSchema: %s", t.Name, serverName, err)
-						} else {
-							td.InputSchema = s
-							if raw, err := json.Marshal(schema); err == nil {
-								if err := schemas.set(t.Name, raw); err != nil {
-									workerLog.Warnf("list-tools: tool %q on MCPServer %q: %s", t.Name, serverName, err)
-								}
-							}
-						}
-					}
+				td, err := toolDefinitionFromMCP(t, serverName, schemas)
+				if err != nil {
+					return &wfv1.ListMCPToolsResponse{}, err
 				}
 				tools = append(tools, td)
 			}
@@ -120,7 +178,7 @@ func makeListToolsActivity(server mcpserverapi.MCPServer, holder *SessionHolder,
 			cursor = result.NextCursor
 		}
 		if cursor != "" {
-			workerLog.Warnf("list-tools: MCPServer %q returned more than %d pages of tools; results truncated", serverName, maxListToolsPages)
+			return &wfv1.ListMCPToolsResponse{}, fmt.Errorf("list-tools: MCPServer %q returned more than %d pages of tools", serverName, maxListToolsPages)
 		}
 
 		return &wfv1.ListMCPToolsResponse{Tools: tools}, nil
@@ -145,32 +203,14 @@ func makeCallToolActivity(server mcpserverapi.MCPServer, holder *SessionHolder, 
 			return errorResult("%s", validationErr), nil
 		}
 
-		session, err := holder.Session(callCtx)
-		if err != nil {
-			return errorResult("call-tool: %s", err), nil
-		}
-
 		workerLog.Debugf("call-tool: calling tool %q on MCPServer %q (%d argument keys)", input.ToolName, serverName, len(input.Arguments))
 
-		result, err := session.CallTool(callCtx, &mcp.CallToolParams{
+		result, err := callToolOnce(callCtx, holder, serverName, &mcp.CallToolParams{
 			Name:      input.ToolName,
 			Arguments: input.Arguments,
 		})
 		if err != nil {
-			if isConnectionClosed(err) {
-				workerLog.Warnf("call-tool: connection lost for %q, reconnecting", serverName)
-				session, err = holder.Reconnect(callCtx)
-				if err != nil {
-					return errorResult("call-tool: reconnect failed for %q: %s", serverName, err), nil
-				}
-				result, err = session.CallTool(callCtx, &mcp.CallToolParams{
-					Name:      input.ToolName,
-					Arguments: input.Arguments,
-				})
-			}
-			if err != nil {
-				return errorResult("call-tool: MCP call failed for tool %q on %q: %s", input.ToolName, serverName, err), nil
-			}
+			return errorResult("%s (tool %q)", err, input.ToolName), nil
 		}
 
 		return convertCallToolResult(result), nil

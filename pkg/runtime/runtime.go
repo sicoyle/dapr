@@ -349,7 +349,7 @@ func newDaprRuntime(ctx context.Context,
 	}
 
 	// Install the wfengine as the processor's internal workflow registrar.
-	processor.SetInternalWorkflows(wfe)
+	processor.SetInProcessWorkflows(wfe)
 
 	jobsManager, err := scheduler.New(scheduler.Options{
 		Namespace:        namespace,

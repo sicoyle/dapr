@@ -15,10 +15,13 @@ package mcp
 
 import (
 	"context"
+	"math"
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -381,4 +384,232 @@ func TestMakeListToolsActivity_CacheHitConcurrentRoundTrip(t *testing.T) {
 	for err := range errs {
 		t.Fatalf("concurrent cache-hit call failed: %v", err)
 	}
+}
+
+// newReconnectableHolder builds a fully-wired SessionHolder (with server +
+// store fields populated) so calls to holder.Reconnect can re-build the
+// underlying transport. connectTestSession bypasses these fields and would
+// panic inside Reconnect.
+func newReconnectableHolder(t *testing.T, url string) (*SessionHolder, mcpserverapi.MCPServer) {
+	t.Helper()
+	store := compstore.New()
+	server := namedServer("myserver", mcpserverapi.MCPServerSpec{
+		Endpoint: mcpserverapi.MCPEndpoint{
+			StreamableHTTP: &mcpserverapi.MCPStreamableHTTP{URL: url},
+		},
+	})
+	store.AddMCPServer(server)
+	holder, err := NewSessionHolder(context.Background(), &server, store, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { holder.Close() })
+	return holder, server
+}
+
+// --- listToolsPage ---
+
+func TestListToolsPage_HappyPath(t *testing.T) {
+	ts := newMCPTestServer(t, nil)
+	holder := connectTestSession(t, ts.URL)
+
+	result, err := listToolsPage(context.Background(), 5*time.Second, holder, "myserver", &mcp.ListToolsParams{})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Tools, 1)
+	assert.Equal(t, "greet", result.Tools[0].Name)
+}
+
+func TestListToolsPage_ReconnectsOnConnectionClosed(t *testing.T) {
+	ts := newMCPTestServer(t, nil)
+	holder, _ := newReconnectableHolder(t, ts.URL)
+
+	// Closing the cached session forces ListTools to fail with ErrConnectionClosed,
+	// which sends listToolsPage down the reconnect path.
+	original, err := holder.Session(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, original.Close())
+
+	result, err := listToolsPage(context.Background(), 5*time.Second, holder, "myserver", &mcp.ListToolsParams{})
+	require.NoError(t, err)
+	require.Len(t, result.Tools, 1)
+
+	// After reconnect, the holder must have a fresh session.
+	current, err := holder.Session(context.Background())
+	require.NoError(t, err)
+	assert.NotSame(t, original, current, "holder must hold a fresh session after reconnect")
+}
+
+func TestListToolsPage_SessionAcquireFailureMessage(t *testing.T) {
+	ts := newMCPTestServer(t, nil)
+	holder, _ := newReconnectableHolder(t, ts.URL)
+
+	// Closed holder rejects holder.Session() before any call is attempted.
+	ts.Close()
+	holder.Close()
+
+	_, err := listToolsPage(context.Background(), 1*time.Second, holder, "myserver", &mcp.ListToolsParams{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `list-tools: session for "myserver"`)
+}
+
+func TestListToolsPage_ReconnectFailureMessage(t *testing.T) {
+	ts := newMCPTestServer(t, nil)
+	holder, _ := newReconnectableHolder(t, ts.URL)
+
+	// Close the cached session to force ErrConnectionClosed on the next call,
+	// then tear down the server so holder.Reconnect can't re-establish.
+	cached, err := holder.Session(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, cached.Close())
+	ts.Close()
+
+	_, err = listToolsPage(context.Background(), 1*time.Second, holder, "myserver", &mcp.ListToolsParams{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `list-tools: reconnect failed for "myserver"`)
+}
+
+// --- callToolOnce ---
+
+func TestCallToolOnce_HappyPath(t *testing.T) {
+	ts := newMCPTestServer(t, nil)
+	holder := connectTestSession(t, ts.URL)
+
+	result, err := callToolOnce(context.Background(), holder, "myserver", &mcp.CallToolParams{
+		Name:      "greet",
+		Arguments: map[string]any{"name": "dapr"},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotEmpty(t, result.Content)
+}
+
+func TestCallToolOnce_ReconnectsOnConnectionClosed(t *testing.T) {
+	ts := newMCPTestServer(t, nil)
+	holder, _ := newReconnectableHolder(t, ts.URL)
+
+	original, err := holder.Session(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, original.Close())
+
+	result, err := callToolOnce(context.Background(), holder, "myserver", &mcp.CallToolParams{
+		Name:      "greet",
+		Arguments: map[string]any{"name": "dapr"},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	current, err := holder.Session(context.Background())
+	require.NoError(t, err)
+	assert.NotSame(t, original, current, "holder must hold a fresh session after reconnect")
+}
+
+func TestCallToolOnce_SessionAcquireFailureMessage(t *testing.T) {
+	ts := newMCPTestServer(t, nil)
+	holder, _ := newReconnectableHolder(t, ts.URL)
+
+	ts.Close()
+	holder.Close()
+
+	_, err := callToolOnce(context.Background(), holder, "myserver", &mcp.CallToolParams{
+		Name:      "greet",
+		Arguments: map[string]any{"name": "dapr"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `call-tool: session for "myserver"`)
+}
+
+func TestCallToolOnce_ReconnectFailureMessage(t *testing.T) {
+	ts := newMCPTestServer(t, nil)
+	holder, _ := newReconnectableHolder(t, ts.URL)
+
+	cached, err := holder.Session(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, cached.Close())
+	ts.Close()
+
+	_, err = callToolOnce(context.Background(), holder, "myserver", &mcp.CallToolParams{
+		Name:      "greet",
+		Arguments: map[string]any{"name": "dapr"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `call-tool: reconnect failed for "myserver"`)
+}
+
+// --- toolDefinitionFromMCP ---
+
+func TestToolDefinitionFromMCP_FullTool(t *testing.T) {
+	schemas := &toolSchemaCache{}
+	tool := &mcp.Tool{
+		Name:        "greet",
+		Description: "Returns a greeting",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string"},
+			},
+			"required": []any{"name"},
+		},
+	}
+
+	td, err := toolDefinitionFromMCP(tool, "myserver", schemas)
+	require.NoError(t, err)
+	require.NotNil(t, td)
+	assert.Equal(t, "greet", td.GetName())
+	require.NotNil(t, td.Description)
+	assert.Equal(t, "Returns a greeting", *td.Description)
+	require.NotNil(t, td.InputSchema)
+
+	cached, ok := schemas.get("greet")
+	assert.True(t, ok, "input schema must be cached on success")
+	assert.NotEmpty(t, cached)
+}
+
+func TestToolDefinitionFromMCP_NoDescription(t *testing.T) {
+	tool := &mcp.Tool{
+		Name:        "noop",
+		InputSchema: map[string]any{"type": "object"},
+	}
+	td, err := toolDefinitionFromMCP(tool, "myserver", &toolSchemaCache{})
+	require.NoError(t, err)
+	assert.Nil(t, td.Description, "empty description must produce nil pointer")
+}
+
+func TestToolDefinitionFromMCP_NoInputSchema(t *testing.T) {
+	schemas := &toolSchemaCache{}
+	tool := &mcp.Tool{Name: "schemaless"}
+
+	td, err := toolDefinitionFromMCP(tool, "myserver", schemas)
+	require.NoError(t, err)
+	assert.Nil(t, td.InputSchema, "missing input schema must produce nil")
+
+	_, ok := schemas.get("schemaless")
+	assert.False(t, ok, "no schema should be cached when InputSchema is nil")
+}
+
+func TestToolDefinitionFromMCP_NonObjectSchema(t *testing.T) {
+	tool := &mcp.Tool{
+		Name:        "weird",
+		InputSchema: "this-is-a-string-not-an-object",
+	}
+	_, err := toolDefinitionFromMCP(tool, "myserver", &toolSchemaCache{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-object inputSchema")
+	assert.Contains(t, err.Error(), `"weird"`)
+	assert.Contains(t, err.Error(), `"myserver"`)
+}
+
+func TestToolDefinitionFromMCP_NonFiniteNumberFails(t *testing.T) {
+	// json.Marshal rejects NaN; structpb may also reject it depending on
+	// version. Either rejection is acceptable — what matters is that the
+	// helper returns an error with both tool and server context.
+	tool := &mcp.Tool{
+		Name: "nansy",
+		InputSchema: map[string]any{
+			"type":    "number",
+			"default": math.NaN(),
+		},
+	}
+	_, err := toolDefinitionFromMCP(tool, "myserver", &toolSchemaCache{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"nansy"`)
+	assert.Contains(t, err.Error(), `"myserver"`)
 }
