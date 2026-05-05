@@ -120,6 +120,7 @@ func WorkflowNameFromCreateRequest(data []byte) (string, error) {
 
 func operationFromHistoryEvent(ev *backend.HistoryEvent) (wfaclapi.WorkflowOperation, error) {
 	switch {
+	// User-initiated operations subject to access control.
 	case ev.GetExecutionTerminated() != nil:
 		return wfaclapi.WorkflowOperationTerminate, nil
 	case ev.GetEventRaised() != nil:
@@ -128,6 +129,18 @@ func operationFromHistoryEvent(ev *backend.HistoryEvent) (wfaclapi.WorkflowOpera
 		return wfaclapi.WorkflowOperationPause, nil
 	case ev.GetExecutionResumed() != nil:
 		return wfaclapi.WorkflowOperationResume, nil
+
+	// System-internal continuations also flow through AddWorkflowEvent but are not user operations.
+	// An activity result publishes a TaskCompleted or TaskFailed.
+	// A finishing child workflow publishes a ChildWorkflowInstanceCompleted or
+	// ChildWorkflowInstanceFailed back to the parent.
+	// These are not subject to access control.
+	case ev.GetTaskCompleted() != nil,
+		ev.GetTaskFailed() != nil,
+		ev.GetChildWorkflowInstanceCompleted() != nil,
+		ev.GetChildWorkflowInstanceFailed() != nil:
+		return "", nil
+
 	default:
 		return "", fmt.Errorf("AddWorkflowEvent HistoryEvent has unsupported event type %T", ev.GetEventType())
 	}
