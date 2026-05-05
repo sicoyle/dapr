@@ -135,12 +135,22 @@ spec:
 	t.Run("delete MCPServer via hot-reload and verify workflow unregistered", func(t *testing.T) {
 		require.NoError(t, os.Remove(mcpFilePath))
 
-		// After delete, the workflow is unregistered: dapr's start endpoint hangs
-		// (WaitForInstanceStart blocks forever), so runWorkflow's per-tick timeout
-		// returns an error each tick. We assert that error eventually appears.
+		// After delete, the workflow is unregistered. The runtime surfaces this
+		// in one of two ways depending on platform/timing:
+		//   - WaitForInstanceStart blocks → tryRunWorkflow's per-tick timeout
+		//     returns a polling error.
+		//   - Start succeeds and the orchestrator immediately fails (durabletask
+		//     "workflow not registered" → setFailed → ORCHESTRATION_STATUS_FAILED).
+		// Either is a valid signal the workflow is gone; assert we don't see a
+		// COMPLETED status (which would mean the workflow is still wired).
 		assert.EventuallyWithT(t, func(c *assert.CollectT) {
-			_, err := tryRunWorkflow(ctx, s.httpClient, s.daprd.HTTPPort(), listToolsName, map[string]any{}, 3*time.Second)
-			assert.Error(c, err, "ListTools start should hang or fail after MCPServer is deleted")
+			status, err := tryRunWorkflow(ctx, s.httpClient, s.daprd.HTTPPort(), listToolsName, map[string]any{}, 3*time.Second)
+			if err != nil {
+				// Polling error (start hung) — workflow is gone. Pass.
+				return
+			}
+			assert.NotEqual(c, statusCompleted, status.RuntimeStatus,
+				"ListTools should not COMPLETE after MCPServer is deleted")
 		}, 30*time.Second, time.Second)
 	})
 }

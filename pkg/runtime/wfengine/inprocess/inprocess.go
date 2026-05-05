@@ -66,3 +66,10 @@ func (e *Executor) RegisterMCPServer(ctx context.Context, server mcpserverapi.MC
 func (e *Executor) UnregisterMCPServer(serverName string) {
 	e.mcp.unregister(serverName)
 }
+
+// Close tears down all MCPServer holders so their lifecycle contexts are
+// cancelled and any background goroutines exit.
+func (e *Executor) Close() error {
+	e.mcp.close()
+	return nil
+}

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
@@ -82,6 +83,10 @@ func BuildHTTPClient(
 	// still control cancellation/deadlines, and the DialContext timeout on the
 	// cloned transport ensures stuck TCP connections fail fast.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// Bound time-to-first-byte so an unresponsive MCP server
+	// (accepts the TCP connection but never replies) can't wedge a request indefinitely.
+	// Safe for SSE: servers send response headers promptly; only the body streams long.
+	transport.ResponseHeaderTimeout = 5 * time.Second
 	var authTransport http.RoundTripper = transport
 
 	// OAuth2 client credentials — wraps raw transport with token injection.
