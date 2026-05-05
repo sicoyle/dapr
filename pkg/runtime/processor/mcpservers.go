@@ -124,8 +124,10 @@ func (p *Processor) processMCPServers(ctx context.Context) error {
 
 		// Skip registration if the runtime is already shutting down — the
 		// derived contexts inside RegisterMCPServer would just error out.
-		if ctx.Err() != nil {
+		select {
+		case <-ctx.Done():
 			return nil
+		default:
 		}
 
 		wg.Add(1)

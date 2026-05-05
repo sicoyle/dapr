@@ -555,8 +555,8 @@ func TestToolDefinitionFromMCP_FullTool(t *testing.T) {
 	require.NotNil(t, td)
 	assert.Equal(t, "greet", td.GetName())
 	require.NotNil(t, td.Description)
-	assert.Equal(t, "Returns a greeting", *td.Description)
-	require.NotNil(t, td.InputSchema)
+	assert.Equal(t, "Returns a greeting", td.GetDescription())
+	require.NotNil(t, td.GetInputSchema())
 
 	cached, ok := schemas.get("greet")
 	assert.True(t, ok, "input schema must be cached on success")
@@ -579,7 +579,7 @@ func TestToolDefinitionFromMCP_NoInputSchema(t *testing.T) {
 
 	td, err := toolDefinitionFromMCP(tool, "myserver", schemas)
 	require.NoError(t, err)
-	assert.Nil(t, td.InputSchema, "missing input schema must produce nil")
+	assert.Nil(t, td.GetInputSchema(), "missing input schema must produce nil")
 
 	_, ok := schemas.get("schemaless")
 	assert.False(t, ok, "no schema should be cached when InputSchema is nil")
