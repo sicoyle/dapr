@@ -123,7 +123,8 @@ func (s *listToolsUnreachable) Run(t *testing.T, ctx context.Context) {
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
 		assert.Contains(t, string(respBody), "ERR_WORKFLOW_NAME_RESERVED")
 	})
 }
