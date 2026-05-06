@@ -93,7 +93,13 @@ func (a *Universal) StartWorkflow(ctx context.Context, in *runtimev1pb.StartWork
 		return &runtimev1pb.StartWorkflowResponse{}, err
 	}
 
-	if strings.HasPrefix(in.GetWorkflowName(), wfengine.ReservedWorkflowNamePrefix) {
+	// Names with the reserved prefix are routed to the in-process executor
+	// regardless of any SDK-side registration. Reject them unless they
+	// resolve to a registered managed workflow (e.g. an MCPServer-installed
+	// CallTool/ListTools), so users don't silently lose work items by
+	// shadowing the prefix in their own SDK.
+	if strings.HasPrefix(in.GetWorkflowName(), wfengine.ReservedWorkflowNamePrefix) &&
+		!a.workflowEngine.HasInProcessWorkflow(in.GetWorkflowName()) {
 		err := messages.ErrWorkflowNameReserved.WithFormat(in.GetWorkflowName(), wfengine.ReservedWorkflowNamePrefix)
 		a.logger.Debug(err)
 		return &runtimev1pb.StartWorkflowResponse{}, err

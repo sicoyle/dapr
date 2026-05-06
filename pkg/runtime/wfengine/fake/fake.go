@@ -127,3 +127,5 @@ func (f *Fake) RegisterMCPServer(_ context.Context, _ mcpserverapi.MCPServer, _ 
 }
 
 func (f *Fake) UnregisterMCPServer(_ string) {}
+
+func (f *Fake) HasInProcessWorkflow(_ string) bool { return false }

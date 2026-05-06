@@ -55,6 +55,15 @@ func (e *Executor) Backend() backend.Executor {
 	return e.executor
 }
 
+// HasWorkflow reports whether a workflow with the given name is registered
+// in the in-process registry. Used by the API layer to distinguish
+// legitimate calls to managed workflows from attempts to use the reserved
+// prefix for user workflows (which would never reach an SDK worker).
+func (e *Executor) HasWorkflow(name string) bool {
+	_, _, err := e.registry.ResolveWorkflow(name, nil)
+	return err == nil
+}
+
 // RegisterMCPServer eagerly connects to the MCPServer, discovers its tools,
 // and installs per-tool CallTool workflows plus a ListTools workflow into the
 // shared task registry. Called by the processor on initial load and hot-reload.

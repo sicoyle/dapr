@@ -65,6 +65,12 @@ type Interface interface {
 	RuntimeMetadata() *runtimev1pb.MetadataWorkflows
 	InProcessExecutor() *inprocess.Executor
 
+	// HasInProcessWorkflow reports whether a workflow with the given name is
+	// registered in the in-process registry. Used by the Universal API to
+	// distinguish legitimate calls to managed workflows from attempts to use
+	// the reserved prefix for user workflows.
+	HasInProcessWorkflow(name string) bool
+
 	ActivityActorType() string
 	WorkflowActorType() string
 }
@@ -304,6 +310,10 @@ func (wfe *engine) UnregisterMCPServer(serverName string) {
 
 func (wfe *engine) InProcessExecutor() *inprocess.Executor {
 	return wfe.inProcessExec
+}
+
+func (wfe *engine) HasInProcessWorkflow(name string) bool {
+	return wfe.inProcessExec.HasWorkflow(name)
 }
 
 func (wfe *engine) RegisterGrpcServer(server *grpc.Server) {

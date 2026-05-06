@@ -43,12 +43,17 @@ type fileload struct {
 func (s *fileload) Setup(t *testing.T) []framework.Option {
 	resDir := t.TempDir()
 
+	// ignoreErrors=true on every resource: this test runs without placement,
+	// so EnsureActorsRegistered would otherwise fail and shut down daprd, and
+	// the invalid-mcp validation failure would do the same. Both are expected
+	// here — we're verifying file-load behaviour, not workflow invocation.
 	require.NoError(t, os.WriteFile(filepath.Join(resDir, "global.yaml"), []byte(`
 apiVersion: dapr.io/v1alpha1
 kind: MCPServer
 metadata:
   name: global-mcp
 spec:
+  ignoreErrors: true
   endpoint:
     streamableHTTP:
       url: http://example.com/mcp
@@ -60,6 +65,7 @@ kind: MCPServer
 metadata:
   name: scoped-mcp
 spec:
+  ignoreErrors: true
   endpoint:
     sse:
       url: http://scoped.example.com/sse
@@ -74,6 +80,7 @@ kind: MCPServer
 metadata:
   name: other-app-mcp
 spec:
+  ignoreErrors: true
   endpoint:
     streamableHTTP:
       url: http://other.example.com/mcp
@@ -81,13 +88,15 @@ scopes:
 - different-app
 `), 0o600))
 
-	// Invalid: two transports — should be rejected by validation.
+	// Invalid: two transports — should be rejected by validation but not
+	// terminate daprd because ignoreErrors=true on the spec.
 	require.NoError(t, os.WriteFile(filepath.Join(resDir, "invalid.yaml"), []byte(`
 apiVersion: dapr.io/v1alpha1
 kind: MCPServer
 metadata:
   name: invalid-mcp
 spec:
+  ignoreErrors: true
   endpoint:
     streamableHTTP:
       url: http://example.com/mcp
