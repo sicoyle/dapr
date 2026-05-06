@@ -18,9 +18,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
@@ -124,16 +124,8 @@ func (s *accessPolicyScoped) Run(t *testing.T, ctx context.Context) {
 	t.Run("scoped out MCPServer workflow not registered", func(t *testing.T) {
 		// Because the MCPServer was filtered out by appID scoping, its workflow
 		// (dapr.internal.mcp.restricted-mcp.ListTools) was never registered in the
-		// in-process task registry. We can't read the registry directly via the
-		// metadata API, so we infer non-registration from the start API's
-		// behavior: the dapr workflow start endpoint synchronously waits for
-		// the orchestrator to begin executing (WaitForInstanceStart). When the
-		// orchestrator is not registered, that call hangs until the request
-		// context expires — so a POST with a short client timeout MUST error
-		// out. If the start succeeded fast, the workflow is registered and
-		// this assertion fails.
-		shortClient := fclient.HTTPWithTimeout(t, 3*time.Second)
-
+		// in-process task registry. The Universal API rejects unregistered
+		// reserved-prefix workflow names synchronously with 400 + ERR_WORKFLOW_NAME_RESERVED.
 		body, err := json.Marshal(map[string]any{})
 		require.NoError(t, err)
 		reqURL := fmt.Sprintf("http://localhost:%d/v1.0-beta1/workflows/dapr/%s/start",
@@ -142,13 +134,11 @@ func (s *accessPolicyScoped) Run(t *testing.T, ctx context.Context) {
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
 
-		resp, err := shortClient.Do(req)
-		if resp != nil {
-			resp.Body.Close()
-		}
-		// Any non-nil error here proves the start hung past the short timeout,
-		// which means no orchestrator was registered to make the workflow start
-		// progress. A successful 202 would mean the workflow IS registered.
-		require.Error(t, err, "start of unregistered workflow should not succeed quickly")
+		resp, err := s.httpClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		respBody, _ := io.ReadAll(resp.Body)
+		assert.Contains(t, string(respBody), "ERR_WORKFLOW_NAME_RESERVED")
 	})
 }

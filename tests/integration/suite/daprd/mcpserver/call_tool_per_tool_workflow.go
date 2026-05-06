@@ -14,8 +14,11 @@ limitations under the License.
 package mcpserver
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"testing"
 	"time"
@@ -155,15 +158,27 @@ func (s *callToolPerToolWorkflow) Run(t *testing.T, ctx context.Context) {
 		assert.Contains(t, result.GetContent()[0].GetText().GetText(), "Hello, Dapr!")
 	})
 
-	t.Run("non-existent tool workflow name fails as not registered", func(t *testing.T) {
-		input := map[string]any{
-			"arguments": map[string]any{},
-		}
-		// Try a tool that doesn't exist — the workflow should not be registered
-		status := runWorkflow(t, ctx, s.httpClient, s.daprd.HTTPPort(),
-			mcpnames.MCPCallToolWorkflowName("multi-tool", "nonexistent_tool"), input, 30*time.Second)
-		assert.Equal(t, statusFailed, status.RuntimeStatus,
-			"workflow for non-existent tool should fail as not registered")
+	t.Run("non-existent tool workflow name rejected as reserved-prefix-not-registered", func(t *testing.T) {
+		// dapr.internal.mcp.<server>.CallTool.<tool> uses the reserved internal
+		// prefix; if the workflow isn't actually registered as a managed
+		// workflow, StartWorkflow rejects it synchronously with 400 to surface
+		// the misconfiguration rather than silently dispatching to a non-existent
+		// in-process orchestrator.
+		body, err := json.Marshal(map[string]any{"arguments": map[string]any{}})
+		require.NoError(t, err)
+		reqURL := fmt.Sprintf("http://localhost:%d/v1.0-beta1/workflows/dapr/%s/start",
+			s.daprd.HTTPPort(),
+			mcpnames.MCPCallToolWorkflowName("multi-tool", "nonexistent_tool"))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := s.httpClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		respBody, _ := io.ReadAll(resp.Body)
+		assert.Contains(t, string(respBody), "ERR_WORKFLOW_NAME_RESERVED")
 	})
 
 	t.Run("tool name is derived from workflow name", func(t *testing.T) {

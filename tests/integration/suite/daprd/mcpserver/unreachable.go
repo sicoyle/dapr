@@ -14,17 +14,16 @@ limitations under the License.
 package mcpserver
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/dapr/durabletask-go/api"
-	"github.com/dapr/durabletask-go/backend"
-	dtclient "github.com/dapr/durabletask-go/client"
 
 	mcpnames "github.com/dapr/dapr/pkg/runtime/wfengine/inprocess/mcp/v1/names"
 	"github.com/dapr/dapr/tests/integration/framework"
@@ -83,6 +82,10 @@ kind: MCPServer
 metadata:
   name: dead-server
 spec:
+  # Eager tool discovery will fail because the endpoint is unreachable;
+  # ignoreErrors=true keeps daprd running so we can assert the workflow
+  # was not registered.
+  ignoreErrors: true
   endpoint:
     streamableHTTP:
       url: http://localhost:%d/mcp
@@ -101,21 +104,26 @@ func (s *listToolsUnreachable) Run(t *testing.T, ctx context.Context) {
 	s.daprd.WaitUntilRunning(t, ctx)
 
 	s.httpClient = fclient.HTTP(t)
-	taskhubClient := dtclient.NewTaskHubGrpcClient(s.daprd.GRPCConn(t, ctx), backend.DefaultLogger())
 
 	t.Run("ListTools fails when MCP server is unreachable", func(t *testing.T) {
-		instanceID := startMCPWorkflow(ctx, t, s.httpClient, s.daprd.HTTPPort(),
-			mcpnames.MCPListToolsWorkflowName("dead-server"), map[string]any{})
-
-		metadata, err := taskhubClient.WaitForWorkflowCompletion(
-			ctx, api.InstanceID(instanceID), api.WithFetchPayloads(true))
+		// Eager tool discovery during MCPServer registration failed because the
+		// endpoint is unreachable; with ignoreErrors=true the sidecar stays up
+		// but the per-server workflows are not registered. StartWorkflow then
+		// rejects the call synchronously via the reserved-prefix-not-registered
+		// validation.
+		body, err := json.Marshal(map[string]any{})
 		require.NoError(t, err)
-		assert.True(t, api.WorkflowMetadataIsComplete(metadata))
+		reqURL := fmt.Sprintf("http://localhost:%d/v1.0-beta1/workflows/dapr/%s/start",
+			s.daprd.HTTPPort(), mcpnames.MCPListToolsWorkflowName("dead-server"))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
 
-		// The list-tools activity fails (connection refused / timeout), which causes
-		// the orchestration to fail. The output should be empty or the failure reason
-		// should be available in the failure details.
-		assert.NotNil(t, metadata.GetFailureDetails(),
-			"expected orchestration to fail when MCP server is unreachable")
+		resp, err := s.httpClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		respBody, _ := io.ReadAll(resp.Body)
+		assert.Contains(t, string(respBody), "ERR_WORKFLOW_NAME_RESERVED")
 	})
 }
