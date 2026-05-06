@@ -144,10 +144,10 @@ func (p *Processor) processMCPServers(ctx context.Context) error {
 				return
 			}
 
-			// Ensure workflow actor types are registered with placement before
-			// any internal workflow becomes invokable.
-			if err := registrar.EnsureActorsRegistered(ctx); err != nil {
-				err = fmt.Errorf("MCPServer %q: failed to register workflow actors: %w", s.Name, err)
+			// Register the activity/workflow handlers in the in-process registry
+			// before telling placement we're online for the workflow actor types.
+			if err := registrar.RegisterMCPServer(ctx, s, p.compStore, p.security); err != nil {
+				err = fmt.Errorf("MCPServer %q: failed to register workflows: %w", s.Name, err)
 				if !s.Spec.IgnoreErrors {
 					log.Warnf("Async error processing MCPServer, daprd will exit gracefully: %s", err)
 					p.errorMCPServers(ctx, err)
@@ -156,8 +156,8 @@ func (p *Processor) processMCPServers(ctx context.Context) error {
 				log.Errorf("Ignoring async error processing MCPServer: %s", err)
 				return
 			}
-			if err := registrar.RegisterMCPServer(ctx, s, p.compStore, p.security); err != nil {
-				err = fmt.Errorf("MCPServer %q: failed to register workflows: %w", s.Name, err)
+			if err := registrar.EnsureActorsRegistered(ctx); err != nil {
+				err = fmt.Errorf("MCPServer %q: failed to register workflow actors: %w", s.Name, err)
 				if !s.Spec.IgnoreErrors {
 					log.Warnf("Async error processing MCPServer, daprd will exit gracefully: %s", err)
 					p.errorMCPServers(ctx, err)

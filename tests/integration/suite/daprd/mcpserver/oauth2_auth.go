@@ -99,7 +99,7 @@ func (s *oauth2Auth) Setup(t *testing.T) []framework.Option {
 	secretsDir := t.TempDir()
 	secretsFile := filepath.Join(secretsDir, "secrets.json")
 	require.NoError(t, os.WriteFile(secretsFile,
-		[]byte(`{"mcp-oauth-secret": "test-client-secret-xyz"}`), 0o600))
+		[]byte(`{"mcp-oauth-secret": {"client_secret": "test-client-secret-xyz"}}`), 0o600))
 	s.daprd = daprd.New(t,
 		daprd.WithAppPort(appProc.Port()),
 		daprd.WithAppProtocol("http"),
@@ -126,14 +126,14 @@ spec:
   endpoint:
     streamableHTTP:
       url: http://localhost:%d
-  auth:
-    secretStore: inmemory
-    oauth2:
-      issuer: http://localhost:%d/token
-      clientID: test-client-id
-      secretKeyRef:
-        name: mcp-oauth-secret
-        key: client_secret
+      auth:
+        secretStore: inmemory
+        oauth2:
+          issuer: http://localhost:%d/token
+          clientID: test-client-id
+          secretKeyRef:
+            name: mcp-oauth-secret
+            key: client_secret
 `, mcpSrvProc.Port(), tokenServer.Port()),
 			// Local-file secret store component backed by a real JSON file.
 			fmt.Sprintf(`
@@ -148,7 +148,7 @@ spec:
   - name: secretsFile
     value: %q
   - name: multiValued
-    value: "false"
+    value: "true"
 `, secretsFile),
 		),
 	)
