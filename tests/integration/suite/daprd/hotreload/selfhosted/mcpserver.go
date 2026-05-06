@@ -49,6 +49,7 @@ kind: MCPServer
 metadata:
   name: weather-mcp
 spec:
+  ignoreErrors: true
   endpoint:
     streamableHTTP:
       url: http://example.com/mcp
@@ -84,6 +85,7 @@ kind: MCPServer
 metadata:
   name: tools-mcp
 spec:
+  ignoreErrors: true
   endpoint:
     streamableHTTP:
       url: http://example.com/tools
@@ -114,6 +116,7 @@ kind: MCPServer
 metadata:
   name: re-added-mcp
 spec:
+  ignoreErrors: true
   endpoint:
     streamableHTTP:
       url: http://example.com/readded

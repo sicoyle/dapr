@@ -76,6 +76,8 @@ func (s *secretref) Setup(t *testing.T) []framework.Option {
 				{
 					ObjectMeta: metav1.ObjectMeta{Name: "secreted-mcp", Namespace: "default"},
 					Spec: mcpapi.MCPServerSpec{
+						// example.com is unreachable; ignoreErrors keeps daprd up.
+						IgnoreErrors: true,
 						Endpoint: mcpapi.MCPEndpoint{
 							StreamableHTTP: &mcpapi.MCPStreamableHTTP{
 								URL: "http://example.com/mcp",

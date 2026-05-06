@@ -84,6 +84,8 @@ func (s *scopes) Setup(t *testing.T) []framework.Option {
 				{
 					ObjectMeta: metav1.ObjectMeta{Name: "global-mcp", Namespace: "default"},
 					Spec: mcpapi.MCPServerSpec{
+						// example.com is unreachable; ignoreErrors keeps daprd up.
+						IgnoreErrors: true,
 						Endpoint: mcpapi.MCPEndpoint{
 							StreamableHTTP: &mcpapi.MCPStreamableHTTP{URL: "http://example.com/mcp"},
 						},
@@ -92,6 +94,8 @@ func (s *scopes) Setup(t *testing.T) []framework.Option {
 				{
 					ObjectMeta: metav1.ObjectMeta{Name: "scoped-mcp", Namespace: "default"},
 					Spec: mcpapi.MCPServerSpec{
+						// scoped.example.com is unreachable; ignoreErrors keeps daprd up.
+						IgnoreErrors: true,
 						Endpoint: mcpapi.MCPEndpoint{
 							StreamableHTTP: &mcpapi.MCPStreamableHTTP{URL: "http://scoped.example.com/mcp"},
 						},

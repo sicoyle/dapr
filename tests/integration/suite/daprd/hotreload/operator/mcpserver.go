@@ -75,6 +75,8 @@ func (m *mcpserver) Run(t *testing.T, ctx context.Context) {
 	weatherMCP := mcpserverapi.MCPServer{
 		ObjectMeta: metav1.ObjectMeta{Name: "weather-mcp", Namespace: "default"},
 		Spec: mcpserverapi.MCPServerSpec{
+			// example.com is unreachable; ignoreErrors keeps daprd up.
+			IgnoreErrors: true,
 			Endpoint: mcpserverapi.MCPEndpoint{
 				StreamableHTTP: &mcpserverapi.MCPStreamableHTTP{
 					URL: "http://example.com/mcp",
