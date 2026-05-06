@@ -124,8 +124,9 @@ func (h *SessionHolder) Reconnect(ctx context.Context) (*mcp.ClientSession, erro
 	return session, nil
 }
 
-// Close closes the underlying session and marks the holder as closed.
-// Idempotent and safe for concurrent use.
+// Close cancels the lifecycle ctx and issues the session DELETE.
+// Use Cancel for runtime shutdown — the DELETE can hang past budget.
+// Idempotent.
 func (h *SessionHolder) Close() {
 	if !h.closed.CompareAndSwap(false, true) {
 		return
@@ -138,6 +139,13 @@ func (h *SessionHolder) Close() {
 		(*s).Close()
 		h.session.Store(nil)
 	}
+}
+
+func (h *SessionHolder) Cancel() {
+	if !h.closed.CompareAndSwap(false, true) {
+		return
+	}
+	h.lifecycleCancel()
 }
 
 // connect builds an HTTP client, transport, and MCP session.

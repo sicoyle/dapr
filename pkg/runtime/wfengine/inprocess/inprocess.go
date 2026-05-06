@@ -76,9 +76,8 @@ func (e *Executor) UnregisterMCPServer(serverName string) {
 	e.mcp.unregister(serverName)
 }
 
-// Close tears down all MCPServer holders so their lifecycle contexts are
-// cancelled and any background goroutines exit.
-func (e *Executor) Close() error {
-	e.mcp.close()
-	return nil
+// Cancel cancels every holder's lifecycle without the per-session
+// DELETE. Used by runtime shutdown; see SessionHolder.Cancel.
+func (e *Executor) Cancel() {
+	e.mcp.cancel()
 }

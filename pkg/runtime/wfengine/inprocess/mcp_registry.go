@@ -124,11 +124,8 @@ func (r *mcpRegistry) register(ctx context.Context, server mcpserverapi.MCPServe
 	return nil
 }
 
-// close tears down every registered MCPServer. Closes each holder so its
-// lifecycle context is cancelled, which stops any background work the holder
-// owns (e.g. OAuth2 token refreshers, lazy-reconnect retries) so it doesn't
-// outlive runtime shutdown.
-func (r *mcpRegistry) close() {
+// cancel teardown for runtime shutdown.
+func (r *mcpRegistry) cancel() {
 	r.entriesMu.Lock()
 	entries := make([]*mcpEntry, 0, len(r.entries))
 	for _, e := range r.entries {
@@ -138,7 +135,7 @@ func (r *mcpRegistry) close() {
 
 	for _, entry := range entries {
 		if h := entry.holder; h != nil {
-			h.Close()
+			h.Cancel()
 		}
 	}
 }

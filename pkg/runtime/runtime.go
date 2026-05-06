@@ -456,16 +456,12 @@ func newDaprRuntime(ctx context.Context,
 
 			return nil
 		},
-		// Close the in-process MCP executor as soon as ctx cancels so each
-		// SessionHolder's lifecycle context is cancelled, stopping any
-		// background goroutines (token refreshers, lazy reconnects) the
-		// holder owns. Running this as a ctx-watching runner — not as a
-		// closer — ensures it fires alongside other shutdown work rather
-		// than waiting for every other runner to exit first; otherwise a
-		// runner blocked on a holder's HTTP work would deadlock shutdown.
+		// Cancel MCP holders' lifecycle contexts on shutdown so background
+		// work (token refreshers, lazy reconnects) exits.
 		func(ctx context.Context) error {
 			<-ctx.Done()
-			return inProcessExec.Close()
+			inProcessExec.Cancel()
+			return nil
 		},
 	)
 
