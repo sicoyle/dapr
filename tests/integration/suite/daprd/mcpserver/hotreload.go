@@ -27,10 +27,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
 
-	"github.com/dapr/durabletask-go/api"
-	"github.com/dapr/durabletask-go/backend"
-	dtclient "github.com/dapr/durabletask-go/client"
-
 	wfv1 "github.com/dapr/dapr/pkg/proto/workflows/v1"
 	mcpnames "github.com/dapr/dapr/pkg/runtime/wfengine/inprocess/mcp/v1/names"
 	"github.com/dapr/dapr/tests/integration/framework"
@@ -130,39 +126,42 @@ func (s *hotReload) Run(t *testing.T, ctx context.Context) {
 	s.daprd.WaitUntilRunning(t, ctx)
 
 	s.httpClient = fclient.HTTP(t)
-	taskhubClient := dtclient.NewTaskHubGrpcClient(s.daprd.GRPCConn(t, ctx), backend.DefaultLogger())
 
-	callTool := func(t *testing.T) string {
-		t.Helper()
-		input := map[string]any{"arguments": map[string]any{}}
-		instanceID := startMCPWorkflow(ctx, t, s.httpClient, s.daprd.HTTPPort(),
-			mcpnames.MCPCallToolWorkflowName("hotreload-server", "echo"), input)
-
-		metadata, err := taskhubClient.WaitForWorkflowCompletion(
-			ctx, api.InstanceID(instanceID), api.WithFetchPayloads(true))
-		require.NoError(t, err)
-		require.True(t, api.WorkflowMetadataIsComplete(metadata))
-
-		var result wfv1.CallMCPToolResponse
-		require.NoError(t, protojson.Unmarshal([]byte(metadata.GetOutput().GetValue()), &result))
-		require.False(t, result.GetIsError(), "tool call failed: %v", result.GetContent())
-		require.NotEmpty(t, result.GetContent())
-		return result.GetContent()[0].GetText().GetText()
-	}
+	wfName := mcpnames.MCPCallToolWorkflowName("hotreload-server", "echo")
+	input := map[string]any{"arguments": map[string]any{}}
 
 	t.Run("initial call uses server A", func(t *testing.T) {
-		text := callTool(t)
-		assert.Equal(t, "response-from-A", text)
+		status := runWorkflow(t, ctx, s.httpClient, s.daprd.HTTPPort(), wfName, input, 30*time.Second)
+		require.Equal(t, statusCompleted, status.RuntimeStatus)
+
+		var result wfv1.CallMCPToolResponse
+		require.NoError(t, protojson.Unmarshal([]byte(status.Properties["dapr.workflow.output"]), &result))
+		require.False(t, result.GetIsError(), "tool call failed: %v", result.GetContent())
+		require.NotEmpty(t, result.GetContent())
+		assert.Equal(t, "response-from-A", result.GetContent()[0].GetText().GetText())
 	})
 
 	t.Run("after hot-reload, call uses server B", func(t *testing.T) {
-		// Rewrite the resource file to point to server B.
 		s.writeMCPResource(t, s.serverBPort)
-
-		// Poll until the tool call returns the new server's response.
-		require.Eventually(t, func() bool {
-			text := callTool(t)
-			return text == "response-from-B"
+		assert.EventuallyWithT(t, func(c *assert.CollectT) {
+			status, err := tryRunWorkflow(ctx, s.httpClient, s.daprd.HTTPPort(), wfName, input, 5*time.Second)
+			if !assert.NoError(c, err) {
+				return
+			}
+			if !assert.Equal(c, statusCompleted, status.RuntimeStatus) {
+				return
+			}
+			var result wfv1.CallMCPToolResponse
+			if !assert.NoError(c, protojson.Unmarshal([]byte(status.Properties["dapr.workflow.output"]), &result)) {
+				return
+			}
+			if !assert.False(c, result.GetIsError()) {
+				return
+			}
+			if !assert.NotEmpty(c, result.GetContent()) {
+				return
+			}
+			assert.Equal(c, "response-from-B", result.GetContent()[0].GetText().GetText())
 		}, 30*time.Second, 500*time.Millisecond, "expected response from server B after hot-reload")
 	})
 }
